@@ -5,6 +5,7 @@ const os = require('os');
 const http = require('http');
 const crypto = require('crypto');
 const express = require('express');
+const { Pool } = require('pg');
 const { Server } = require('socket.io');
 const { CATEGORIES } = require('./words');
 
@@ -25,9 +26,125 @@ const io = new Server(httpServer, {
   maxHttpBufferSize: 100_000,
 });
 
+const DATABASE_URL = process.env.DATABASE_URL || '';
+const db = DATABASE_URL
+  ? new Pool({
+      connectionString: DATABASE_URL,
+      ssl: /localhost|127\.0\.0\.1/.test(DATABASE_URL) ? false : { rejectUnauthorized: false },
+      max: 5,
+      idleTimeoutMillis: 30_000,
+      connectionTimeoutMillis: 10_000,
+    })
+  : null;
+let dbReady = false;
+
 app.disable('x-powered-by');
 app.use(express.static(path.join(__dirname, 'public')));
-app.get('/health', (_req, res) => res.json({ ok: true, rooms: rooms.size }));
+app.get('/health', (_req, res) => res.json({
+  ok: true,
+  rooms: rooms.size,
+  db: dbReady ? 'ready' : db ? 'pending' : 'off',
+}));
+
+app.get('/api/history', async (_req, res) => {
+  if (!db || !dbReady) {
+    return res.status(503).json({ ok: false, error: 'Histórico indisponível no momento.' });
+  }
+  try {
+    const { rows } = await db.query(`
+      SELECT id, room_code, word, category, hint, impostor_name, accused_id,
+             winner, player_count, players, tally, created_at
+      FROM matches
+      ORDER BY created_at DESC
+      LIMIT 20
+    `);
+    return res.json({
+      ok: true,
+      matches: rows.map((row) => ({
+        id: row.id,
+        roomCode: row.room_code,
+        word: row.word,
+        category: row.category,
+        hint: row.hint,
+        impostorName: row.impostor_name,
+        accusedId: row.accused_id,
+        winner: row.winner,
+        playerCount: row.player_count,
+        players: row.players,
+        tally: row.tally,
+        createdAt: row.created_at,
+      })),
+    });
+  } catch (err) {
+    console.error('Banco: falha ao ler histórico:', err.message);
+    return res.status(500).json({ ok: false, error: 'Não foi possível carregar o histórico.' });
+  }
+});
+
+// ---------- database ----------
+
+async function initDb() {
+  if (!db) {
+    console.log('  Banco: desativado (DATABASE_URL não configurada).');
+    return;
+  }
+  try {
+    await db.query(`
+      CREATE TABLE IF NOT EXISTS matches (
+        id UUID PRIMARY KEY,
+        room_code TEXT NOT NULL,
+        word TEXT NOT NULL,
+        category TEXT NOT NULL,
+        hint TEXT NOT NULL,
+        impostor_id TEXT NOT NULL,
+        impostor_name TEXT NOT NULL,
+        accused_id TEXT,
+        winner TEXT NOT NULL,
+        player_count INTEGER NOT NULL,
+        players JSONB NOT NULL,
+        clues JSONB NOT NULL,
+        votes JSONB NOT NULL,
+        tally JSONB NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+      CREATE INDEX IF NOT EXISTS matches_created_at_idx ON matches (created_at DESC);
+    `);
+    dbReady = true;
+    console.log('  Banco: conectado e tabela de histórico pronta.');
+  } catch (err) {
+    dbReady = false;
+    console.error('  Banco: falha ao inicializar:', err.message);
+  }
+}
+
+function saveMatch(room) {
+  if (!db || !dbReady || !room.game) return;
+  const g = room.game;
+  const players = playerList(room).map((p) => ({ id: p.id, name: p.name }));
+  db.query(
+    `INSERT INTO matches
+      (id, room_code, word, category, hint, impostor_id, impostor_name, accused_id,
+       winner, player_count, players, clues, votes, tally)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+     ON CONFLICT (id) DO NOTHING`,
+    [
+      g.id,
+      room.code,
+      g.word,
+      g.category,
+      g.hint,
+      g.impostorId,
+      g.impostorName,
+      g.accusedId,
+      g.winner,
+      room.players.size,
+      JSON.stringify(players),
+      JSON.stringify(g.clues),
+      JSON.stringify(g.votes),
+      JSON.stringify(g.tally),
+    ]
+  ).catch((err) => console.error('Banco: falha ao salvar partida:', err.message));
+}
 
 // ---------- helpers ----------
 
@@ -329,6 +446,7 @@ function resolveVotes(room) {
   else room.scores.impostor += 1;
 
   room.phase = 'results';
+  saveMatch(room);
   touch(room);
 }
 
@@ -713,4 +831,5 @@ httpServer.listen(PORT, '0.0.0.0', () => {
   console.log(`  Local:   http://localhost:${PORT}`);
   for (const url of lanUrls(PORT)) console.log(`  Rede:    ${url}`);
   console.log('');
+  initDb();
 });

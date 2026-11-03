@@ -878,6 +878,30 @@ input:focus {
 .rules-list strong { color: var(--text); }
 .rules-list li::marker { color: var(--lime); font-weight: 900; }
 
+.history-list { display: grid; gap: 10px; }
+.history-item {
+  padding: 13px 14px;
+  border: 1px solid var(--line);
+  border-radius: 15px;
+  background: rgba(255, 255, 255, 0.03);
+}
+.history-top { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.history-word { font-size: 17px; font-weight: 900; letter-spacing: -0.02em; }
+.history-winner {
+  flex: 0 0 auto;
+  padding: 3px 8px;
+  border-radius: 999px;
+  font-size: 9px;
+  font-weight: 900;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.history-winner--crew { background: rgba(201, 247, 90, 0.12); color: var(--lime); }
+.history-winner--impostor { background: var(--red-soft); color: var(--red); }
+.history-meta { margin-top: 5px; color: var(--muted); font-size: 12px; line-height: 1.55; }
+.history-meta strong { color: #ccd4df; }
+.history-empty { padding: 18px 0 8px; color: var(--muted); font-size: 13px; line-height: 1.5; text-align: center; }
+
 /* ---------- boot / toast / connection ---------- */
 
 .boot {

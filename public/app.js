@@ -163,6 +163,70 @@
     openModal($('modal-role'));
   }
 
+  function formatHistoryDate(value) {
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return '';
+    return date.toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+  }
+
+  function historyItemHtml(match) {
+    const crewWon = match.winner === 'crew';
+    const names = Array.isArray(match.players) ? match.players.map((p) => p?.name).filter(Boolean) : [];
+    const playersLine = names.length
+      ? names.map(esc).join(', ')
+      : `${match.playerCount || 0} jogadores`;
+    const details = [match.category, match.hint ? `dica: ${match.hint}` : '']
+      .filter(Boolean)
+      .map(esc)
+      .join(' · ');
+    const meta = [
+      playersLine,
+      esc(formatHistoryDate(match.createdAt)),
+      match.roomCode ? `sala ${esc(match.roomCode)}` : '',
+    ].filter(Boolean).join(' · ');
+
+    return `
+      <div class="history-item">
+        <div class="history-top">
+          <span class="history-word">${esc(match.word || '—')}</span>
+          <span class="history-winner history-winner--${crewWon ? 'crew' : 'impostor'}">${crewWon ? 'Equipe' : 'Impostor'}</span>
+        </div>
+        <p class="history-meta">
+          <strong>${esc(match.impostorName || '???')}</strong> era o impostor${details ? ` · ${details}` : ''}<br>
+          ${meta}
+        </p>
+      </div>`;
+  }
+
+  async function loadHistory() {
+    const box = $('history-content');
+    box.innerHTML = '<p class="muted center">Carregando…</p>';
+    try {
+      const res = await fetch('/api/history', { headers: { accept: 'application/json' } });
+      const data = await res.json().catch(() => null);
+      if (!res.ok || !data?.ok) {
+        const message = data?.error
+          || (res.status === 503
+            ? 'O histórico ainda não está ativo. Ele aparece aqui assim que o banco de dados estiver conectado.'
+            : 'Não foi possível carregar o histórico agora.');
+        box.innerHTML = `<p class="history-empty">${esc(message)}</p>`;
+        return;
+      }
+      if (!Array.isArray(data.matches) || data.matches.length === 0) {
+        box.innerHTML = '<p class="history-empty">Nenhuma partida finalizada ainda.<br>Jogue a primeira e ela aparece aqui.</p>';
+        return;
+      }
+      box.innerHTML = data.matches.map(historyItemHtml).join('');
+    } catch {
+      box.innerHTML = '<p class="history-empty">Sem conexão com o servidor. Tente novamente em instantes.</p>';
+    }
+  }
+
+  function openHistory() {
+    openModal($('modal-history'));
+    loadHistory();
+  }
+
   function rolePreviewHtml(me) {
     if (!me?.role) return '<p class="muted center">Seu papel aparece quando a partida começar.</p>';
     if (me.role === 'impostor') {
@@ -775,6 +839,8 @@
 
   $('btn-rules-home').addEventListener('click', () => openModal($('modal-rules')));
   $('btn-rules-lobby').addEventListener('click', () => openModal($('modal-rules')));
+  $('btn-history-home').addEventListener('click', openHistory);
+  $('btn-history-lobby').addEventListener('click', openHistory);
   $('btn-copy-code').addEventListener('click', copyInvite);
 
   $('lobby-players').addEventListener('click', async (event) => {

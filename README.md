@@ -8,6 +8,8 @@ O plano free do Render hiberna após alguns minutos sem uso. A primeira visita d
 
 Jogo multiplayer em que **um jogador é o impostor** e todos os outros recebem a mesma palavra secreta. Em cada volta, cada jogador dá **uma única palavra** relacionada ao tema. No fim, todos votam em segredo para descobrir quem estava blefando.
 
+As partidas finalizadas ficam salvas em um banco Postgres e aparecem em **Histórico de partidas**, na tela inicial e no lobby.
+
 Feito para jogar cada um no seu celular, de casas diferentes, enquanto conversam por uma chamada de áudio (WhatsApp, Discord, Meet etc.). O app cuida das salas, papéis secretos, turnos e votação — **a chamada de voz é por fora**.
 
 ## Como jogar
@@ -56,7 +58,9 @@ O servidor precisa estar acessível pela internet. Duas opções:
    - **Start Command:** `npm start`
 4. Depois do deploy, compartilhe a URL gerada.
 
-O arquivo `render.yaml` já deixa a configuração pronta para Blueprint. O plano free do Render pode hibernar quando fica um tempo sem acesso — o primeiro carregamento depois disso pode demorar cerca de 30 segundos.
+O arquivo `render.yaml` já deixa a configuração pronta para Blueprint: ele cria o Web Service e um Postgres free na mesma região, e injeta a variável `DATABASE_URL`. O plano free do Render pode hibernar quando fica um tempo sem acesso — o primeiro carregamento depois disso pode demorar cerca de 30 segundos.
+
+> **Atenção:** o Postgres free do Render expira **30 dias após a criação** (com mais 14 dias de carência antes da exclusão). Para manter o histórico por mais tempo, é preciso mudar para um plano pago. O jogo continua funcionando normalmente sem banco: nesse caso, o histórico fica indisponível e as salas seguem apenas em memória.
 
 ### Opção 2 — Cloudflare Tunnel (temporário)
 
@@ -71,7 +75,7 @@ O `cloudflared` mostra uma URL pública temporária. O computador precisa ficar 
 ## Estrutura
 
 ```
-server.js          Servidor Express + Socket.IO (salas, turnos, votos)
+server.js          Servidor Express + Socket.IO (salas, turnos, votos) e Postgres (histórico)
 words.js           Palavras secretas, categorias e dicas genéricas
 public/
   index.html       Interface do jogo
@@ -100,6 +104,7 @@ $env:URL="http://localhost:3102"; node test/reconnect.js
 ## Observações
 
 - As salas ficam em memória. Se o servidor reiniciar, as partidas em andamento são perdidas.
+- O histórico guarda apenas partidas finalizadas (até 20 no app). Sem `DATABASE_URL`, o jogo funciona normalmente e o histórico responde “indisponível”.
 - O app não faz chamada de voz; combinem o áudio antes de começar.
 - Cada jogador pode recarregar a página e voltar para a mesma partida enquanto a sala existir.
 - Joguem com respeito: a graça está no blefe, não em estragar a rodada dos outros.

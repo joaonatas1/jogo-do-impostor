@@ -41,6 +41,7 @@
         </div>
 
         <button id="btn-rules-home" class="link-btn" type="button">Como jogar</button>
+        <button id="btn-history-home" class="link-btn" type="button">Histórico de partidas</button>
       </section>
 
       <!-- LOBBY -->
@@ -99,6 +100,7 @@
         <button id="btn-reset-score" class="link-btn" type="button" hidden>Zerar placar</button>
 
         <button id="btn-rules-lobby" class="link-btn" type="button">Como jogar</button>
+        <button id="btn-history-lobby" class="link-btn" type="button">Histórico de partidas</button>
       </section>
 
       <!-- REVEAL -->
@@ -235,6 +237,18 @@
         </ol>
         <p class="hint">O app não faz chamada de voz. Entrem numa chamada à parte (WhatsApp, Discord, Meet…) e usem o app para conduzir a partida.</p>
         <button class="btn btn--primary" type="button" data-close>Entendi</button>
+      </div>
+    </div>
+
+    <div id="modal-history" class="modal" hidden>
+      <div class="modal-backdrop" data-close></div>
+      <div class="modal-card">
+        <button class="modal-close" type="button" data-close aria-label="Fechar">×</button>
+        <p class="eyebrow">Últimas partidas</p>
+        <h2 class="modal-title">Histórico</h2>
+        <div id="history-content" class="history-list">
+          <p class="muted center">Carregando…</p>
+        </div>
       </div>
     </div>
 
