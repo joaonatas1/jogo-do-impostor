@@ -1,5 +1,11 @@
 # Impostor — jogo de palavras
 
+## Jogar agora
+
+**https://jogo-do-impostor-vpk2.onrender.com**
+
+O plano free do Render hiberna após alguns minutos sem uso. A primeira visita depois disso pode demorar até ~50 segundos; durante uma partida ativa o servidor fica acordado.
+
 Jogo multiplayer em que **um jogador é o impostor** e todos os outros recebem a mesma palavra secreta. Em cada volta, cada jogador dá **uma única palavra** relacionada ao tema. No fim, todos votam em segredo para descobrir quem estava blefando.
 
 Feito para jogar cada um no seu celular, de casas diferentes, enquanto conversam por uma chamada de áudio (WhatsApp, Discord, Meet etc.). O app cuida das salas, papéis secretos, turnos e votação — **a chamada de voz é por fora**.
