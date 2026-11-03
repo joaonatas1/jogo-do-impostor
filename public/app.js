@@ -50,6 +50,21 @@
   let connectionErrorShown = false;
   const locks = new Set();
 
+  const audio = {
+    supported: !!(navigator.mediaDevices?.getUserMedia && window.RTCPeerConnection),
+    active: false,
+    connecting: false,
+    muted: false,
+    wantAudio: false,
+    stream: null,
+    peers: new Map(),
+    iceServers: null,
+    iceFetchedAt: 0,
+    iceTurn: false,
+    selfId: null,
+    joinId: 0,
+  };
+
   function readSession() {
     try {
       const raw = storage.get(SESSION_KEY);
@@ -139,7 +154,9 @@
 
   function showHome() {
     state = null;
+    stopAudio({ notify: true, keepIntent: false });
     showScreen('home');
+    renderAudioUI();
   }
 
   function closeModal(modal) {
@@ -227,6 +244,377 @@
     loadHistory();
   }
 
+  // ---------- audio (WebRTC) ----------
+
+  function audioIceIsFresh() {
+    return audio.iceServers && Date.now() - audio.iceFetchedAt < 45 * 60 * 1000;
+  }
+
+  async function loadAudioIceServers() {
+    if (audioIceIsFresh()) return audio.iceServers;
+    try {
+      const res = await fetch('/api/turn-credentials', { headers: { accept: 'application/json' } });
+      const data = await res.json().catch(() => null);
+      if (data?.iceServers?.length) {
+        audio.iceServers = data.iceServers;
+        audio.iceFetchedAt = Date.now();
+        audio.iceTurn = !!data.turn;
+      }
+    } catch { /* cai no STUN padrão abaixo */ }
+    if (!audio.iceServers) {
+      audio.iceServers = [{ urls: ['stun:stun.cloudflare.com:3478', 'stun:stun.l.google.com:19302'] }];
+      audio.iceFetchedAt = Date.now();
+      audio.iceTurn = false;
+    }
+    return audio.iceServers;
+  }
+
+  function audioPeerEntries() {
+    const list = [];
+    if (state?.me) {
+      list.push({
+        socketId: audio.selfId || socket.id || 'self',
+        playerId: state.me.id,
+        name: state.me.name,
+        muted: audio.muted,
+        self: true,
+        connected: audio.active,
+      });
+    }
+    for (const peer of audio.peers.values()) {
+      list.push({
+        socketId: peer.socketId,
+        playerId: peer.playerId,
+        name: peer.name,
+        muted: peer.muted,
+        self: false,
+        connected: peer.connected,
+      });
+    }
+    return list;
+  }
+
+  function renderAudioUI() {
+    const dock = $('audio-dock');
+    const visible = !!state?.me && currentScreen !== 'home' && currentScreen !== null;
+    dock.hidden = !visible;
+    document.body.classList.toggle('has-audio-dock', visible);
+    if (!visible) return;
+
+    const connectedCount = audio.active ? 1 + audio.peers.size : 0;
+    let text = 'Entrar no áudio';
+    let dotClass = '';
+    if (audio.connecting) {
+      text = 'Conectando áudio…';
+      dotClass = 'is-connecting';
+    } else if (audio.active) {
+      text = `Áudio · ${connectedCount} na chamada`;
+      dotClass = 'is-live';
+    } else if (audio.wantAudio && !socket.connected) {
+      text = 'Áudio desconectado';
+      dotClass = 'is-error';
+    }
+    $('audio-dock-text').textContent = text;
+    $('audio-dot').className = `audio-dot ${dotClass}`.trim();
+
+    $('btn-audio-mute-dock').hidden = !audio.active;
+    $('btn-audio-leave-dock').hidden = !(audio.active || audio.connecting);
+    $('btn-audio-mute-dock').textContent = audio.muted ? '🔇' : '🎙️';
+    $('btn-audio-mute-dock').classList.toggle('is-muted', audio.muted);
+    $('btn-audio-mute-dock').setAttribute('aria-label', audio.muted ? 'Ativar microfone' : 'Silenciar microfone');
+
+    $('btn-audio-join').hidden = audio.active || audio.connecting;
+    $('btn-audio-mute').hidden = !audio.active;
+    $('btn-audio-mute').textContent = audio.muted ? 'Ativar microfone' : 'Silenciar microfone';
+    $('btn-audio-leave').hidden = !(audio.active || audio.connecting);
+
+    let status;
+    if (audio.connecting) status = 'Pedindo acesso ao microfone…';
+    else if (audio.active) {
+      status = connectedCount === 1
+        ? 'Você está no áudio. Aguardando os outros jogadores entrarem.'
+        : `Você está no áudio com ${connectedCount} pessoas.`;
+    } else if (audio.wantAudio && !socket.connected) {
+      status = 'Conexão perdida. O áudio volta quando o jogo reconectar.';
+    } else {
+      status = 'Entre no áudio para conversar enquanto joga.';
+    }
+    $('audio-status').textContent = status;
+
+    const list = $('audio-participants');
+    const entries = (audio.active || audio.connecting) ? audioPeerEntries() : [];
+    list.innerHTML = entries.map((peer) => {
+      const stateText = peer.muted
+        ? 'mudo'
+        : peer.self && audio.connecting
+          ? 'conectando…'
+          : peer.self || peer.connected
+            ? 'microfone ligado'
+            : 'conectando…';
+      const stateClass = peer.muted
+        ? 'is-muted'
+        : peer.self && audio.connecting
+          ? 'is-connecting'
+          : peer.self || peer.connected
+            ? 'is-live'
+            : 'is-connecting';
+      return `<li class="audio-person">
+        ${avatarHtml({ id: peer.playerId, name: peer.name })}
+        <span class="audio-person-name">${esc(peer.name)}${peer.self ? '<span class="player-status">você</span>' : ''}</span>
+        <span class="audio-person-state ${stateClass}">${stateText}</span>
+      </li>`;
+    }).join('');
+  }
+
+  function openAudioModal() {
+    if (!state) return;
+    renderAudioUI();
+    openModal($('modal-audio'));
+  }
+
+  function sendAudioSignal(to, payload) {
+    if (!socket.connected || !audio.active) return;
+    socket.emit('audioSignal', { to, data: payload });
+  }
+
+  async function drainAudioCandidates(entry) {
+    const pending = entry.pendingCandidates.splice(0);
+    for (const candidate of pending) {
+      await entry.pc.addIceCandidate(candidate).catch(() => {});
+    }
+  }
+
+  function createAudioPeer(peer, initiator) {
+    if (!audio.stream || !peer?.socketId) return null;
+    if (audio.peers.has(peer.socketId)) {
+      const existing = audio.peers.get(peer.socketId);
+      existing.name = peer.name || existing.name;
+      existing.muted = !!peer.muted;
+      return existing;
+    }
+
+    const pc = new RTCPeerConnection({
+      iceServers: audio.iceServers || undefined,
+      iceCandidatePoolSize: 4,
+    });
+    const entry = {
+      socketId: peer.socketId,
+      playerId: peer.playerId || '',
+      name: peer.name || 'Jogador',
+      muted: !!peer.muted,
+      pc,
+      audioEl: null,
+      pendingCandidates: [],
+      connected: false,
+    };
+    audio.peers.set(peer.socketId, entry);
+
+    for (const track of audio.stream.getTracks()) pc.addTrack(track, audio.stream);
+
+    pc.onicecandidate = (event) => {
+      if (event.candidate) {
+        sendAudioSignal(peer.socketId, {
+          type: 'candidate',
+          candidate: event.candidate.toJSON(),
+        });
+      }
+    };
+
+    pc.ontrack = (event) => {
+      const stream = event.streams[0] || new MediaStream([event.track]);
+      if (!entry.audioEl) {
+        const el = document.createElement('audio');
+        el.autoplay = true;
+        el.playsInline = true;
+        el.srcObject = stream;
+        el.dataset.audioPeer = peer.socketId;
+        $('audio-elements').appendChild(el);
+        entry.audioEl = el;
+        el.play().catch(() => {});
+      }
+      entry.connected = true;
+      renderAudioUI();
+    };
+
+    pc.onconnectionstatechange = () => {
+      if (pc.connectionState === 'connected') entry.connected = true;
+      else if (['failed', 'closed', 'disconnected'].includes(pc.connectionState)) entry.connected = false;
+      renderAudioUI();
+    };
+
+    if (initiator) {
+      pc.createOffer()
+        .then((offer) => pc.setLocalDescription(offer))
+        .then(() => sendAudioSignal(peer.socketId, {
+          type: 'offer',
+          sdp: { type: pc.localDescription.type, sdp: pc.localDescription.sdp },
+        }))
+        .catch(() => {
+          entry.connected = false;
+          renderAudioUI();
+        });
+    }
+
+    renderAudioUI();
+    return entry;
+  }
+
+  async function handleAudioSignal({ from, fromName, data } = {}) {
+    if (!audio.active || !from || !data) return;
+    let entry = audio.peers.get(from);
+    if (!entry) {
+      if (data.type !== 'offer') return;
+      entry = createAudioPeer({ socketId: from, name: fromName || 'Jogador' }, false);
+      if (!entry) return;
+    }
+
+    try {
+      if (data.type === 'offer') {
+        if (entry.pc.signalingState !== 'stable') return;
+        await entry.pc.setRemoteDescription(data.sdp);
+        await drainAudioCandidates(entry);
+        const answer = await entry.pc.createAnswer();
+        await entry.pc.setLocalDescription(answer);
+        sendAudioSignal(from, {
+          type: 'answer',
+          sdp: { type: entry.pc.localDescription.type, sdp: entry.pc.localDescription.sdp },
+        });
+      } else if (data.type === 'answer') {
+        if (entry.pc.signalingState !== 'have-local-offer') return;
+        await entry.pc.setRemoteDescription(data.sdp);
+        await drainAudioCandidates(entry);
+      } else if (data.type === 'candidate') {
+        if (entry.pc.remoteDescription) {
+          await entry.pc.addIceCandidate(data.candidate).catch(() => {});
+        } else {
+          entry.pendingCandidates.push(data.candidate);
+        }
+      }
+    } catch {
+      entry.connected = false;
+      renderAudioUI();
+    }
+  }
+
+  function closeAudioPeer(socketId) {
+    const entry = audio.peers.get(socketId);
+    if (!entry) return;
+    audio.peers.delete(socketId);
+    try { entry.pc.close(); } catch { /* ignore */ }
+    if (entry.audioEl) {
+      entry.audioEl.srcObject = null;
+      entry.audioEl.remove();
+    }
+  }
+
+  function stopAudioStream() {
+    if (!audio.stream) return;
+    for (const track of audio.stream.getTracks()) {
+      try { track.stop(); } catch { /* ignore */ }
+    }
+    audio.stream = null;
+  }
+
+  function stopAudio({ notify = true, keepIntent = false, message = '' } = {}) {
+    const wasActive = audio.active || audio.connecting;
+    audio.joinId += 1;
+    if (notify && wasActive && socket.connected) socket.emit('audioLeave');
+    for (const socketId of [...audio.peers.keys()]) closeAudioPeer(socketId);
+    stopAudioStream();
+    audio.active = false;
+    audio.connecting = false;
+    audio.selfId = null;
+    if (!keepIntent) audio.wantAudio = false;
+    renderAudioUI();
+    if (message) toast(message);
+  }
+
+  function leaveAudio({ message = '' } = {}) {
+    stopAudio({ notify: true, keepIntent: false, message });
+  }
+
+  function toggleAudioMute() {
+    if (!audio.active) return;
+    audio.muted = !audio.muted;
+    if (audio.stream) {
+      for (const track of audio.stream.getAudioTracks()) track.enabled = !audio.muted;
+    }
+    if (socket.connected) socket.emit('audioMute', { muted: audio.muted });
+    renderAudioUI();
+  }
+
+  async function joinAudio({ silent = false } = {}) {
+    if (!state?.me || audio.active || audio.connecting) return;
+    if (!audio.supported) {
+      toast('Este navegador não suporta chamada de áudio. Use Chrome, Safari ou Firefox atualizado.', 'error');
+      return;
+    }
+
+    const joinId = audio.joinId + 1;
+    audio.joinId = joinId;
+    audio.connecting = true;
+    audio.wantAudio = true;
+    renderAudioUI();
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+          channelCount: 1,
+        },
+        video: false,
+      });
+      if (joinId !== audio.joinId) {
+        if (audio.stream !== stream) {
+          for (const track of stream.getTracks()) track.stop();
+        }
+        return;
+      }
+      audio.stream = stream;
+      for (const track of stream.getAudioTracks()) {
+        track.enabled = !audio.muted;
+        track.addEventListener('ended', () => {
+          if (audio.active) leaveAudio({ message: 'O microfone foi encerrado.' });
+        });
+      }
+
+      await loadAudioIceServers();
+      const res = await request('audioJoin', { muted: audio.muted });
+      if (joinId !== audio.joinId) {
+        if (audio.stream === stream) stopAudioStream();
+        return;
+      }
+      if (!res.ok) throw new Error(res.error || 'Não foi possível entrar no áudio.');
+      if (!state?.me) throw new Error('Você saiu da sala.');
+
+      audio.active = true;
+      audio.connecting = false;
+      audio.selfId = res.selfId || socket.id;
+      for (const peer of res.peers || []) {
+        if (!peer?.socketId || peer.socketId === socket.id) continue;
+        createAudioPeer(peer, true);
+      }
+      renderAudioUI();
+      if (!silent) toast('Você entrou no áudio da sala.');
+    } catch (err) {
+      if (joinId !== audio.joinId) return;
+      audio.connecting = false;
+      audio.active = false;
+      audio.wantAudio = false;
+      stopAudioStream();
+      if (err?.name === 'NotAllowedError' || err?.name === 'SecurityError') {
+        toast('Permissão de microfone negada. Libere o microfone nas configurações do navegador.', 'error');
+      } else if (err?.name === 'NotFoundError' || err?.name === 'OverconstrainedError') {
+        toast('Nenhum microfone disponível neste dispositivo.', 'error');
+      } else {
+        toast(err?.message || 'Não foi possível entrar no áudio.', 'error');
+      }
+      renderAudioUI();
+    }
+  }
+
   function rolePreviewHtml(me) {
     if (!me?.role) return '<p class="muted center">Seu papel aparece quando a partida começar.</p>';
     if (me.role === 'impostor') {
@@ -289,6 +677,8 @@
       default:
         showHome();
     }
+
+    renderAudioUI();
   }
 
   function renderLobby() {
@@ -759,7 +1149,34 @@
     hideBoot();
     setOnline(true);
     render(previous);
+    if (audio.wantAudio && !audio.active && !audio.connecting && socket.connected) {
+      joinAudio({ silent: true });
+    }
   });
+
+  socket.on('audioPeerJoined', ({ peer } = {}) => {
+    if (!audio.active || !peer?.socketId || peer.socketId === socket.id) return;
+    createAudioPeer(peer, false);
+    renderAudioUI();
+  });
+
+  socket.on('audioPeerLeft', ({ socketId } = {}) => {
+    if (!socketId) return;
+    closeAudioPeer(socketId);
+    renderAudioUI();
+  });
+
+  socket.on('audioPeerUpdated', ({ peer } = {}) => {
+    if (!peer?.socketId) return;
+    const entry = audio.peers.get(peer.socketId);
+    if (entry) {
+      entry.name = peer.name || entry.name;
+      entry.muted = !!peer.muted;
+    }
+    renderAudioUI();
+  });
+
+  socket.on('audioSignal', handleAudioSignal);
 
   socket.on('connect', () => {
     setOnline(true);
@@ -771,7 +1188,16 @@
     }
   });
 
-  socket.on('disconnect', () => setOnline(false));
+  socket.on('disconnect', () => {
+    setOnline(false);
+    if (audio.active || audio.connecting) {
+      stopAudio({
+        notify: false,
+        keepIntent: true,
+        message: 'Áudio desconectado. Tentando reconectar…',
+      });
+    }
+  });
 
   socket.on('connect_error', () => {
     setOnline(false);
@@ -842,6 +1268,16 @@
   $('btn-history-home').addEventListener('click', openHistory);
   $('btn-history-lobby').addEventListener('click', openHistory);
   $('btn-copy-code').addEventListener('click', copyInvite);
+
+  $('btn-audio-dock').addEventListener('click', () => {
+    if (audio.active || audio.connecting) openAudioModal();
+    else joinAudio();
+  });
+  $('btn-audio-mute-dock').addEventListener('click', toggleAudioMute);
+  $('btn-audio-leave-dock').addEventListener('click', () => leaveAudio({ message: 'Você saiu do áudio.' }));
+  $('btn-audio-join').addEventListener('click', () => joinAudio());
+  $('btn-audio-mute').addEventListener('click', toggleAudioMute);
+  $('btn-audio-leave').addEventListener('click', () => leaveAudio({ message: 'Você saiu do áudio.' }));
 
   $('lobby-players').addEventListener('click', async (event) => {
     const btn = event.target.closest('[data-kick]');
@@ -942,6 +1378,9 @@
   });
 
   document.addEventListener('click', (event) => {
+    for (const entry of audio.peers.values()) {
+      entry.audioEl?.play().catch(() => {});
+    }
     const closer = event.target.closest('[data-close]');
     if (!closer) return;
     const modal = closer.closest('.modal');

@@ -38,12 +38,22 @@ const db = DATABASE_URL
   : null;
 let dbReady = false;
 
+const TURN_KEY_ID = process.env.TURN_KEY_ID || '';
+const TURN_KEY_API_TOKEN = process.env.TURN_KEY_API_TOKEN || '';
+const STUN_SERVERS = [
+  { urls: ['stun:stun.cloudflare.com:3478', 'stun:stun.l.google.com:19302'] },
+];
+const TURN_TTL_SECONDS = 2 * 60 * 60;
+const TURN_CACHE_MS = 45 * 60 * 1000;
+let turnCache = { at: 0, iceServers: null };
+
 app.disable('x-powered-by');
 app.use(express.static(path.join(__dirname, 'public')));
 app.get('/health', (_req, res) => res.json({
   ok: true,
   rooms: rooms.size,
   db: dbReady ? 'ready' : db ? 'pending' : 'off',
+  turn: TURN_KEY_ID ? 'configured' : 'off',
 }));
 
 app.get('/api/history', async (_req, res) => {
@@ -78,6 +88,66 @@ app.get('/api/history', async (_req, res) => {
   } catch (err) {
     console.error('Banco: falha ao ler histórico:', err.message);
     return res.status(500).json({ ok: false, error: 'Não foi possível carregar o histórico.' });
+  }
+});
+
+app.get('/api/turn-credentials', async (_req, res) => {
+  res.set('Cache-Control', 'no-store');
+  if (!TURN_KEY_ID || !TURN_KEY_API_TOKEN) {
+    return res.json({ ok: true, turn: false, iceServers: STUN_SERVERS });
+  }
+  if (turnCache.iceServers && Date.now() - turnCache.at < TURN_CACHE_MS) {
+    return res.json({ ok: true, turn: true, iceServers: turnCache.iceServers });
+  }
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 8000);
+  try {
+    const response = await fetch(
+      `https://rtc.live.cloudflare.com/v1/turn/keys/${encodeURIComponent(TURN_KEY_ID)}/credentials/generate-ice-servers`,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${TURN_KEY_API_TOKEN}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ ttl: TURN_TTL_SECONDS }),
+        signal: controller.signal,
+      }
+    );
+    if (!response.ok) throw new Error(`Cloudflare respondeu ${response.status}`);
+    const data = await response.json();
+    const raw = Array.isArray(data.iceServers) ? data.iceServers : [];
+    const filtered = raw
+      .map((server) => {
+        const urls = Array.isArray(server.urls) ? server.urls : [server.urls];
+        return {
+          ...server,
+          urls: urls.filter((url) => url && !/:53(?:\?|$)/.test(String(url))),
+        };
+      })
+      .filter((server) => server.urls.length > 0);
+
+    const hasStun = filtered.some((server) =>
+      server.urls.some((url) => String(url).startsWith('stun:'))
+    );
+    const iceServers = hasStun ? filtered : [...STUN_SERVERS, ...filtered];
+    if (!iceServers.some((server) => server.urls.some((url) => String(url).startsWith('turn')))) {
+      throw new Error('Cloudflare não retornou servidores TURN');
+    }
+
+    turnCache = { at: Date.now(), iceServers };
+    return res.json({ ok: true, turn: true, iceServers });
+  } catch (err) {
+    console.error('TURN: falha ao gerar credenciais:', err.message);
+    return res.json({
+      ok: true,
+      turn: false,
+      iceServers: STUN_SERVERS,
+      warning: 'TURN indisponível no momento.',
+    });
+  } finally {
+    clearTimeout(timer);
   }
 });
 
@@ -211,6 +281,27 @@ function connectedPlayers(room) {
   return playerList(room).filter((p) => p.connected);
 }
 
+function audioPeerList(room) {
+  return [...room.audioPeers.values()].map((peer) => ({
+    socketId: peer.socketId,
+    playerId: peer.playerId,
+    name: peer.name,
+    muted: !!peer.muted,
+  }));
+}
+
+function removeAudioPeer(socket, room, notify = true) {
+  if (!room?.audioPeers?.has(socket.id)) return;
+  const peer = room.audioPeers.get(socket.id);
+  room.audioPeers.delete(socket.id);
+  if (notify) {
+    io.to(room.code).emit('audioPeerLeft', {
+      socketId: socket.id,
+      playerId: peer.playerId,
+    });
+  }
+}
+
 function ensureHost(room) {
   const host = room.players.get(room.hostId);
   if (host && host.connected) return;
@@ -318,6 +409,7 @@ function detachSocket(socket, remove) {
 
   const room = rooms.get(code);
   if (!room) return;
+  removeAudioPeer(socket, room, true);
   const player = room.players.get(playerId);
   if (!player) return;
 
@@ -485,6 +577,7 @@ function createRoom(socket, data, cb) {
     settings: { clueRounds: 1 },
     scores: { crew: 0, impostor: 0 },
     players: new Map(),
+    audioPeers: new Map(),
     game: null,
     lastActivity: Date.now(),
   };
@@ -516,6 +609,7 @@ function joinRoom(socket, data, cb) {
     if (existing.socketId && existing.socketId !== socket.id) {
       const old = io.sockets.sockets.get(existing.socketId);
       if (old) {
+        removeAudioPeer(old, room, true);
         old.emit('sessionReplaced');
         old.leave(room.code);
         old.data.roomCode = null;
@@ -744,6 +838,7 @@ function kickPlayer(socket, data, cb) {
   if (targetSocketId) {
     const targetSocket = io.sockets.sockets.get(targetSocketId);
     if (targetSocket) {
+      removeAudioPeer(targetSocket, room, true);
       targetSocket.emit('kicked');
       targetSocket.leave(room.code);
       targetSocket.data.roomCode = null;
@@ -771,6 +866,80 @@ function getContext(socket) {
   const player = room.players.get(playerId);
   if (!player || player.socketId !== socket.id) return { room: null, player: null };
   return { room, player };
+}
+
+// ---------- audio (WebRTC signaling) ----------
+
+function audioJoin(socket, data, cb) {
+  const { room, player } = getContext(socket);
+  if (!room || !player) return reply(cb, { ok: false, error: 'Você não está em uma sala.' });
+  if (!room.audioPeers) room.audioPeers = new Map();
+
+  for (const [socketId, peer] of room.audioPeers) {
+    if (peer.playerId === player.id && socketId !== socket.id) {
+      room.audioPeers.delete(socketId);
+      io.to(room.code).emit('audioPeerLeft', { socketId, playerId: peer.playerId });
+    }
+  }
+
+  const existing = audioPeerList(room).filter((peer) => peer.socketId !== socket.id);
+  const self = {
+    socketId: socket.id,
+    playerId: player.id,
+    name: player.name,
+    muted: !!data.muted,
+  };
+  const already = room.audioPeers.has(socket.id);
+  room.audioPeers.set(socket.id, self);
+  socket.to(room.code).emit(already ? 'audioPeerUpdated' : 'audioPeerJoined', { peer: self });
+  touch(room);
+  return reply(cb, { ok: true, selfId: socket.id, peers: existing });
+}
+
+function audioLeave(socket, _data, cb) {
+  const { room } = getContext(socket);
+  if (room) removeAudioPeer(socket, room, true);
+  return reply(cb, { ok: true });
+}
+
+function audioMute(socket, data, cb) {
+  const { room } = getContext(socket);
+  if (!room) return reply(cb, { ok: false, error: 'Você não está em uma sala.' });
+  const peer = room.audioPeers?.get(socket.id);
+  if (!peer) return reply(cb, { ok: false, error: 'Você não está no áudio.' });
+  peer.muted = !!data.muted;
+  socket.to(room.code).emit('audioPeerUpdated', { peer });
+  return reply(cb, { ok: true });
+}
+
+function audioSignal(socket, data, cb) {
+  const { room } = getContext(socket);
+  if (!room?.audioPeers?.has(socket.id)) {
+    return reply(cb, { ok: false, error: 'Você não está no áudio.' });
+  }
+  const to = String(data.to || '');
+  const target = room.audioPeers.get(to);
+  if (!target || to === socket.id) {
+    return reply(cb, { ok: false, error: 'Jogador não está no áudio.' });
+  }
+  const payload = data.data;
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+    return reply(cb, { ok: false, error: 'Sinal inválido.' });
+  }
+  if (!['offer', 'answer', 'candidate'].includes(payload.type)) {
+    return reply(cb, { ok: false, error: 'Sinal inválido.' });
+  }
+  let size = 0;
+  try { size = JSON.stringify(payload).length; } catch { size = 0; }
+  if (size > 60_000) return reply(cb, { ok: false, error: 'Sinal muito grande.' });
+
+  const sender = room.audioPeers.get(socket.id);
+  io.to(to).emit('audioSignal', {
+    from: socket.id,
+    fromName: sender.name,
+    data: payload,
+  });
+  return reply(cb, { ok: true });
 }
 
 // ---------- socket wiring ----------
@@ -802,6 +971,10 @@ io.on('connection', (socket) => {
   handle('resetScores', (_data, cb) => resetScores(socket, cb));
   handle('kickPlayer', (data, cb) => kickPlayer(socket, data, cb));
   handle('leaveRoom', (_data, cb) => leaveRoom(socket, cb));
+  handle('audioJoin', (data, cb) => audioJoin(socket, data, cb));
+  handle('audioLeave', (data, cb) => audioLeave(socket, data, cb));
+  handle('audioMute', (data, cb) => audioMute(socket, data, cb));
+  handle('audioSignal', (data, cb) => audioSignal(socket, data, cb));
 
   socket.on('disconnect', () => detachSocket(socket, false));
 });

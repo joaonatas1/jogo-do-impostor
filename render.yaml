@@ -20,3 +20,7 @@ services:
         fromDatabase:
           name: jogo-do-impostor-db
           property: connectionString
+      - key: TURN_KEY_ID
+        sync: false
+      - key: TURN_KEY_API_TOKEN
+        sync: false

@@ -37,7 +37,7 @@
           </label>
 
           <button id="btn-join" class="btn btn--ghost" type="button">Entrar com código</button>
-          <p class="hint">Dica: entrem numa chamada de áudio para dar as dicas e discutir.</p>
+          <p class="hint">Dica: entrem na chamada de áudio aqui do jogo para dar as dicas e discutir.</p>
         </div>
 
         <button id="btn-rules-home" class="link-btn" type="button">Como jogar</button>
@@ -235,7 +235,7 @@
           <li>Depois das voltas, todos votam em segredo em quem acham que é o impostor.</li>
           <li>Se o mais votado for o impostor, <strong>a equipe vence</strong>. Se não, ou se houver empate, <strong>o impostor vence</strong>.</li>
         </ol>
-        <p class="hint">O app não faz chamada de voz. Entrem numa chamada à parte (WhatsApp, Discord, Meet…) e usem o app para conduzir a partida.</p>
+        <p class="hint">O áudio da partida acontece aqui no app: toque em “Entrar no áudio” no rodapé. Se preferirem, também podem usar uma chamada externa.</p>
         <button class="btn btn--primary" type="button" data-close>Entendi</button>
       </div>
     </div>
@@ -251,6 +251,33 @@
         </div>
       </div>
     </div>
+
+    <div id="modal-audio" class="modal" hidden>
+      <div class="modal-backdrop" data-close></div>
+      <div class="modal-card">
+        <button class="modal-close" type="button" data-close aria-label="Fechar">×</button>
+        <p class="eyebrow">Chamada da sala</p>
+        <h2 class="modal-title">Áudio</h2>
+        <p id="audio-status" class="muted">Entre no áudio para conversar enquanto joga.</p>
+        <ul id="audio-participants" class="audio-participants"></ul>
+        <div class="audio-actions">
+          <button id="btn-audio-join" class="btn btn--primary" type="button">Entrar no áudio</button>
+          <button id="btn-audio-mute" class="btn btn--ghost" type="button" hidden>Silenciar microfone</button>
+          <button id="btn-audio-leave" class="btn btn--ghost" type="button" hidden>Sair do áudio</button>
+        </div>
+        <p class="hint">Use fones de ouvido para evitar eco. O áudio continua ativo se você fechar esta janela.</p>
+      </div>
+    </div>
+
+    <div id="audio-dock" class="audio-dock" hidden>
+      <button id="btn-audio-dock" class="audio-dock-main" type="button">
+        <span id="audio-dot" class="audio-dot"></span>
+        <span id="audio-dock-text">Entrar no áudio</span>
+      </button>
+      <button id="btn-audio-mute-dock" class="audio-dock-btn" type="button" aria-label="Silenciar microfone" hidden>🎙️</button>
+      <button id="btn-audio-leave-dock" class="audio-dock-btn" type="button" aria-label="Sair do áudio" hidden>×</button>
+    </div>
+    <div id="audio-elements" class="audio-elements" aria-hidden="true"></div>
 
     <div id="toast" class="toast" role="status" aria-live="polite"></div>
   </div>

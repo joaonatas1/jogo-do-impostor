@@ -10,7 +10,7 @@ Jogo multiplayer em que **um jogador é o impostor** e todos os outros recebem a
 
 As partidas finalizadas ficam salvas em um banco Postgres e aparecem em **Histórico de partidas**, na tela inicial e no lobby.
 
-Feito para jogar cada um no seu celular, de casas diferentes, enquanto conversam por uma chamada de áudio (WhatsApp, Discord, Meet etc.). O app cuida das salas, papéis secretos, turnos e votação — **a chamada de voz é por fora**.
+Feito para jogar cada um no seu celular, de casas diferentes. O app cuida das salas, papéis secretos, turnos, votação **e da chamada de áudio** — não é preciso usar WhatsApp, Discord ou Meet.
 
 ## Como jogar
 
@@ -20,7 +20,7 @@ Feito para jogar cada um no seu celular, de casas diferentes, enquanto conversam
 4. Cada jogador vê seu papel em segredo:
    - **Equipe:** vê a palavra secreta e a categoria.
    - **Impostor:** vê apenas a categoria e uma dica genérica.
-5. Em cada volta, todos dão uma palavra, um por vez. Dá para **digitar** a palavra no app ou **falar no áudio** e tocar em “Já falei”.
+5. Em cada volta, todos dão uma palavra, um por vez. Dá para **digitar** a palavra no app ou **falar no áudio** e tocar em “Já falei”. Para usar a voz, toque em **Entrar no áudio** no rodapé e libere o microfone. A chamada continua ativa durante revelação, dicas, votação e resultado.
 6. Depois das voltas, cada jogador vota em segredo.
 7. Se o mais votado for o impostor, **a equipe vence**. Se não, ou se houver empate, **o impostor vence**.
 8. O anfitrião pode jogar novamente ou voltar ao lobby. O placar da série fica salvo.
@@ -60,6 +60,19 @@ O servidor precisa estar acessível pela internet. Duas opções:
 
 O arquivo `render.yaml` já deixa a configuração pronta para Blueprint: ele cria o Web Service e um Postgres free na mesma região, e injeta a variável `DATABASE_URL`. O plano free do Render pode hibernar quando fica um tempo sem acesso — o primeiro carregamento depois disso pode demorar cerca de 30 segundos.
 
+#### Áudio (WebRTC + TURN)
+
+O áudio é **ponto a ponto (WebRTC mesh)**: o áudio vai direto entre os navegadores e o servidor só faz a sinalização pelo Socket.IO. Sem TURN, o jogo funciona em redes Wi-Fi domésticas, mas conexões 4G/CGNAT podem falhar. Para cobrir esses casos, configure o TURN gratuito da Cloudflare:
+
+1. Crie uma conta em [dash.cloudflare.com](https://dash.cloudflare.com/) e abra **Realtime** (link direto: [dash.cloudflare.com/?to=/:account/calls](https://dash.cloudflare.com/?to=/:account/calls)).
+2. Crie uma **TURN Key** e copie o **Key ID** e o **API Token**.
+3. No Render, defina as variáveis de ambiente:
+   - `TURN_KEY_ID`: ID da TURN key.
+   - `TURN_KEY_API_TOKEN`: token secreto da TURN key.
+4. Faça o redeploy. Confira em `/health`: deve aparecer `"turn":"configured"`.
+
+As credenciais TURN são geradas no servidor (`GET /api/turn-credentials`), duram 2 horas e ficam em cache por 45 minutos. O token da Cloudflare **nunca** vai para o navegador. O plano free da Cloudflare inclui **1.000 GB/mês** de relay, suficiente para muitas partidas em áudio. Sem as variáveis, o endpoint devolve apenas STUN e o jogo continua funcionando.
+
 > **Atenção:** o Postgres free do Render expira **30 dias após a criação** (com mais 14 dias de carência antes da exclusão). Para manter o histórico por mais tempo, é preciso mudar para um plano pago. O jogo continua funcionando normalmente sem banco: nesse caso, o histórico fica indisponível e as salas seguem apenas em memória.
 
 ### Opção 2 — Cloudflare Tunnel (temporário)
@@ -84,6 +97,7 @@ public/
 test/
   e2e.js           Teste do fluxo completo (4 jogadores)
   reconnect.js     Teste de reconexão e bloqueios de entrada
+  audio.js         Teste da sinalização de áudio (join, mute, relay, leave)
 ```
 
 ## Testes (desenvolvimento)
@@ -99,12 +113,14 @@ Em outro terminal:
 ```powershell
 $env:URL="http://localhost:3102"; node test/e2e.js
 $env:URL="http://localhost:3102"; node test/reconnect.js
+$env:URL="http://localhost:3102"; node test/audio.js
 ```
 
 ## Observações
 
 - As salas ficam em memória. Se o servidor reiniciar, as partidas em andamento são perdidas.
 - O histórico guarda apenas partidas finalizadas (até 20 no app). Sem `DATABASE_URL`, o jogo funciona normalmente e o histórico responde “indisponível”.
-- O app não faz chamada de voz; combinem o áudio antes de começar.
+- A chamada de áudio usa o microfone do navegador e exige HTTPS (ou `localhost`). O Render já serve em HTTPS.
+- Use fones de ouvido para evitar eco. Em redes muito restritivas, configure o TURN da Cloudflare para o áudio funcionar via relay.
 - Cada jogador pode recarregar a página e voltar para a mesma partida enquanto a sala existir.
 - Joguem com respeito: a graça está no blefe, não em estragar a rodada dos outros.
