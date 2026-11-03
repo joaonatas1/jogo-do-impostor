@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#080b10">
+  <title>Impostor — jogo de palavras</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><rect width='64' height='64' rx='16' fill='%23c9f75a'/><text x='32' y='45' font-size='40' font-weight='900' text-anchor='middle' fill='%23111607'>?</text></svg>">
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div id="app">
+    <div id="connection-banner" class="connection-banner" hidden>Sem conexão — reconectando…</div>
+
+    <main id="screens">
+      <!-- HOME -->
+      <section id="screen-home" class="screen screen--home">
+        <div class="brand">
+          <div class="brand-mark">?</div>
+          <h1>IMPOSTOR<span>.</span></h1>
+          <p>Uma palavra. Um intruso. Nenhuma piedade.</p>
+        </div>
+
+        <div class="card">
+          <label class="field">
+            <span>Seu nome</span>
+            <input id="input-name" maxlength="18" placeholder="Como te chamam?" autocomplete="nickname">
+          </label>
+
+          <button id="btn-create" class="btn btn--primary" type="button">Criar sala</button>
+
+          <div class="divider"><span>ou entre em uma sala</span></div>
+
+          <label class="field">
+            <span>Código da sala</span>
+            <input id="input-code" maxlength="5" placeholder="ABC12" autocapitalize="characters" autocomplete="off" spellcheck="false">
+          </label>
+
+          <button id="btn-join" class="btn btn--ghost" type="button">Entrar com código</button>
+          <p class="hint">Dica: entrem numa chamada de áudio para dar as dicas e discutir.</p>
+        </div>
+
+        <button id="btn-rules-home" class="link-btn" type="button">Como jogar</button>
+      </section>
+
+      <!-- LOBBY -->
+      <section id="screen-lobby" class="screen">
+        <header class="topbar">
+          <div>
+            <span class="eyebrow">Sala</span>
+            <button id="btn-copy-code" class="room-code" type="button" title="Copiar convite">
+              <span id="room-code-value">·····</span>
+              <span class="copy-icon" aria-hidden="true">⧉</span>
+            </button>
+          </div>
+          <button id="btn-leave-lobby" class="text-btn" type="button">Sair</button>
+        </header>
+
+        <div class="card">
+          <div class="section-head">
+            <h2>Jogadores <span id="player-count" class="muted"></span></h2>
+            <span class="online-label"><i></i> online</span>
+          </div>
+          <ul id="lobby-players" class="player-list"></ul>
+          <p id="lobby-empty" class="hint">Compartilhe o código com seus amigos.</p>
+        </div>
+
+        <div id="host-settings" class="card" hidden>
+          <div class="section-head">
+            <h2>Voltas de dicas</h2>
+            <span class="muted">antes da votação</span>
+          </div>
+          <div id="rounds-options" class="segmented">
+            <button type="button" data-rounds="1">1</button>
+            <button type="button" data-rounds="2">2</button>
+            <button type="button" data-rounds="3">3</button>
+          </div>
+          <p class="hint">Em cada volta, todos dão uma palavra. Mais voltas = mais pistas.</p>
+          <button id="btn-start" class="btn btn--primary" type="button">Iniciar partida</button>
+          <p id="start-hint" class="hint center"></p>
+        </div>
+
+        <div id="waiting-panel" class="card waiting-panel" hidden>
+          <div class="pulse-dot"></div>
+          <p id="waiting-host-text">Aguardando o anfitrião iniciar a partida…</p>
+        </div>
+
+        <div id="lobby-score" class="scoreboard" hidden>
+          <div class="score-team">
+            <span>Equipe</span>
+            <strong id="score-crew">0</strong>
+          </div>
+          <span class="score-x">×</span>
+          <div class="score-team score-team--impostor">
+            <span>Impostor</span>
+            <strong id="score-impostor">0</strong>
+          </div>
+        </div>
+        <button id="btn-reset-score" class="link-btn" type="button" hidden>Zerar placar</button>
+
+        <button id="btn-rules-lobby" class="link-btn" type="button">Como jogar</button>
+      </section>
+
+      <!-- REVEAL -->
+      <section id="screen-reveal" class="screen screen--center">
+        <div class="reveal-wrap">
+          <p class="eyebrow center">Sua carta secreta</p>
+          <div id="role-card" class="role-card" role="button" tabindex="0" aria-label="Toque para revelar seu papel">
+            <div class="role-inner">
+              <div class="role-face role-front">
+                <div class="role-front-icon">?</div>
+                <h2>Toque para revelar</h2>
+                <p>Ninguém mais deve ver esta tela.</p>
+              </div>
+              <div class="role-face role-back" id="role-back"></div>
+            </div>
+          </div>
+          <p id="reveal-ready" class="muted center"></p>
+          <button id="btn-confirm-role" class="btn btn--primary" type="button" disabled>Entendi, estou pronto</button>
+          <button id="btn-force-clues" class="link-btn" type="button" hidden>Iniciar dicas agora (anfitrião)</button>
+          <button id="btn-leave-reveal" class="link-btn" type="button">Sair da partida</button>
+        </div>
+      </section>
+
+      <!-- GAME -->
+      <section id="screen-game" class="screen">
+        <header class="game-top">
+          <div id="game-round" class="round-pill">Volta 1/2</div>
+          <button id="btn-view-role" class="pill-btn" type="button">Meu papel</button>
+        </header>
+
+        <div id="game-personal" class="personal-card"></div>
+
+        <div id="turn-banner" class="turn-banner"></div>
+
+        <div class="card card--log">
+          <div class="section-head">
+            <h2>Dicas</h2>
+            <span id="clue-count" class="muted"></span>
+          </div>
+          <div id="clue-log" class="clue-log"></div>
+        </div>
+
+        <form id="clue-form" class="clue-form" hidden autocomplete="off">
+          <input id="clue-input" maxlength="24" placeholder="UMA palavra…" autocapitalize="off" spellcheck="false">
+          <button id="btn-send-clue" class="btn btn--primary" type="submit">Enviar</button>
+        </form>
+        <button id="btn-spoken-clue" class="btn btn--ghost btn--spoken" type="button" hidden>Já falei no áudio</button>
+        <p id="clue-error" class="error" hidden></p>
+
+        <div id="game-waiting" class="waiting-box" hidden></div>
+        <button id="btn-skip-turn" class="link-btn" type="button" hidden>Pular vez (anfitrião)</button>
+        <button id="btn-leave-game" class="link-btn" type="button">Sair da partida</button>
+      </section>
+
+      <!-- VOTING -->
+      <section id="screen-voting" class="screen">
+        <header class="game-top">
+          <div class="round-pill round-pill--danger">Votação</div>
+          <button id="btn-view-role-vote" class="pill-btn" type="button">Meu papel</button>
+        </header>
+
+        <div class="card">
+          <p class="eyebrow">Hora do veredito</p>
+          <h1 class="title">Quem é o impostor?</h1>
+          <p class="muted">Escolha em segredo. O resultado aparece quando todos votarem.</p>
+
+          <div id="vote-grid" class="vote-grid"></div>
+          <button id="btn-confirm-vote" class="btn btn--primary" type="button" disabled>Confirmar voto</button>
+          <p id="vote-waiting" class="muted center"></p>
+          <button id="btn-force-vote" class="link-btn" type="button" hidden>Encerrar votação (anfitrião)</button>
+        </div>
+      </section>
+
+      <!-- RESULTS -->
+      <section id="screen-results" class="screen">
+        <div id="result-hero" class="result-hero">
+          <div id="result-icon" class="result-icon">?</div>
+          <p class="eyebrow">Resultado</p>
+          <h1 id="result-title"></h1>
+          <p id="result-subtitle" class="muted"></p>
+        </div>
+
+        <div class="card card--impostor">
+          <p class="eyebrow">O impostor era</p>
+          <div id="result-impostor" class="impostor-reveal"></div>
+          <div class="word-reveal">
+            <span>A palavra secreta era</span>
+            <strong id="result-word"></strong>
+            <span id="result-category" class="chip"></span>
+          </div>
+          <p id="result-hint" class="hint center"></p>
+        </div>
+
+        <div class="card">
+          <div class="section-head">
+            <h2>Votação</h2>
+            <span id="result-tie" class="muted"></span>
+          </div>
+          <div id="result-tally" class="tally"></div>
+        </div>
+
+        <div id="result-score" class="scoreboard"></div>
+        <div id="result-actions" class="actions"></div>
+        <p id="result-waiting" class="muted center" hidden></p>
+      </section>
+    </main>
+
+    <div id="boot" class="boot" hidden>
+      <div class="spinner"></div>
+      <p id="boot-text">Entrando na sala…</p>
+    </div>
+
+    <div id="modal-role" class="modal" hidden>
+      <div class="modal-backdrop" data-close></div>
+      <div class="modal-card">
+        <button class="modal-close" type="button" data-close aria-label="Fechar">×</button>
+        <div id="modal-role-content"></div>
+      </div>
+    </div>
+
+    <div id="modal-rules" class="modal" hidden>
+      <div class="modal-backdrop" data-close></div>
+      <div class="modal-card">
+        <button class="modal-close" type="button" data-close aria-label="Fechar">×</button>
+        <p class="eyebrow">Como jogar</p>
+        <h2 class="modal-title">Impostor</h2>
+        <ol class="rules-list">
+          <li><strong>Um impostor</strong> é sorteado. Todos os outros recebem a mesma palavra secreta.</li>
+          <li>O impostor vê apenas a categoria e uma dica genérica. Ele precisa blefar.</li>
+          <li>Em cada volta, todo mundo dá <strong>uma única palavra</strong> relacionada à palavra secreta, um por vez.</li>
+          <li>Vocês podem falar a dica no áudio e tocar em “Já falei”, ou digitá-la para ficar registrada.</li>
+          <li>Depois das voltas, todos votam em segredo em quem acham que é o impostor.</li>
+          <li>Se o mais votado for o impostor, <strong>a equipe vence</strong>. Se não, ou se houver empate, <strong>o impostor vence</strong>.</li>
+        </ol>
+        <p class="hint">O app não faz chamada de voz. Entrem numa chamada à parte (WhatsApp, Discord, Meet…) e usem o app para conduzir a partida.</p>
+        <button class="btn btn--primary" type="button" data-close>Entendi</button>
+      </div>
+    </div>
+
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  </div>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="/app.js"></script>
+</body>
+</html>
